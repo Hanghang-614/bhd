@@ -66,6 +66,10 @@ curl http://127.0.0.1:8767/health
 uv run bhd-memory dream-scan ./example-session.jsonl --auto-commit
 ```
 
+重复扫描同一个 transcript 时，Dream 会用 `sync_cursor` 记录文件的 `size` 和 `mtime_ns`，未变化的文件会被跳过，响应里的 `skipped_sessions` 会显示本轮跳过数量。若先扫描但未 commit，之后再执行 `--auto-commit`，未变化的 active session 仍会被提交，不会被 cursor 挡住。
+
+如果已 committed 的 transcript 后续追加了新 turn，下一次扫描会只插入新增 turn，并把 session 重新标记为 `active`，之后可由 `dream-sweep` 或手动 commit 生成新的 archive。
+
 异步扫描：
 
 ```bash
@@ -376,6 +380,7 @@ export BHD_LLM_API_KEY=optional
 - `hybrid`: LLM 候选优先，再合并规则候选。
 
 敏感、低置信度、冲突候选不会自动 active，会进入 review queue。
+LLM observer 还会检查 evidence 的角色：用户偏好、profile 等用户事实必须至少有一个 `user` / `human` turn 作为证据；assistant/tool-only evidence 只允许生成 `procedure`、`lesson` 或 `agent` scope 的经验类记忆。
 
 批准 conflict 记忆时，系统会把相关旧 active memory 标记为 `archived`，写入 `invalid_at`，并建立 `supersedes` relation。关系可通过：
 

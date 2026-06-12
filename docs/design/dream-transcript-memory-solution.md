@@ -22,9 +22,9 @@ transcript scan
 
 当前实现已经完成主链路：扫描 Claude Code / Codex / 显式 JSONL，保存原始 transcript，写入 `conversation_session` / `conversation_turn`，commit 为 `session_archive`，再通过规则型或 LLM observer 抽取长期记忆，并写入 evidence、operation 和向量索引。
 
-需要优先补齐的能力有三类：
+当前仍需要优先补齐的能力有三类：
 
-1. **真正增量扫描**：当前有 `sync_cursor` 表，但 adapter 尚未使用 cursor；现阶段依赖唯一键、hash 和 archive hash 做幂等。
+1. **更细粒度增量扫描**：文件级 `sync_cursor` 已接入，可以跳过 mtime/size 未变化的 transcript；后续仍需 session/event 级 cursor。
 2. **Reflector 决策层**：当前主要是规则式去重、敏感信息和 conflict 判断；还没有完整的 `skip/create/update/conflict` 反思器。
 3. **更强 transcript parser**：Claude Code / Codex 当前走通用 JSONL 归一化，后续应针对两者的真实事件结构解析 tool call、cwd、session 边界和生命周期事件。
 
@@ -87,19 +87,25 @@ export BHD_CODEX_TRANSCRIPT_DIRS=/path/to/codex/logs
 uv run bhd-memory dream-scan ./example-session.jsonl --auto-commit
 ```
 
-### 2.3 当前幂等策略
+### 2.3 当前增量与幂等策略
 
-当前实现不是 cursor 增量，而是全量枚举后幂等写入：
+当前实现采用文件级 cursor 加幂等写入：
+
+1. `sync_cursor.cursor_json.files[path]` 记录 transcript 的 `size` 和 `mtime_ns`。
+2. 普通扫描会跳过签名未变化的文件。
+3. `auto_commit=True` 时仍会返回未变化但已存在的 session，保证“先 scan、后 auto-commit”的流程可用。
+4. transcript 变化后重新读取文件，并依赖 turn 唯一键只插入新增 turn。
 
 | 层级 | 幂等手段 |
 |---|---|
+| file scan | `sync_cursor` 中的 path、size、mtime_ns |
 | session | `UNIQUE(source_app_id, external_session_id)` |
 | turn | `UNIQUE(session_id, external_turn_id)` + `INSERT OR IGNORE` |
 | archive | `turns_hash` 相同则不新建 archive |
 | memory | `scope + workspace + category + content` 归一化 hash |
 | vector | `vector_index_item` 对 target + index 做 upsert 映射 |
 
-这个策略能保证重复扫描不会大量重复写入，但对大目录长期轮询不够高效，因此后续需要引入 cursor。
+这个策略能保证重复扫描不会大量重复写入，也能降低 watcher 对大目录的重复读取成本。后续需要补齐 session/event 级 cursor，以适配单文件多 session、多文件同 session 和工具生命周期事件。
 
 ## 3. 总体架构
 
@@ -466,13 +472,13 @@ uv run bhd-memory worker
 | `dream_commit` | 后台 commit 单个 session |
 | `dream_sweep` | 后台提交 idle session |
 
-## 10. 增量扫描补齐方案
+## 10. 增量扫描方案
 
-当前 `sync_cursor` 表已存在，但 adapter 尚未实际使用。建议分两步补齐。
+当前已经接入文件级 cursor。建议继续分两步增强。
 
 ### 10.1 文件级 cursor
 
-记录每个 source app 的：
+已实现：记录每个 source app 的：
 
 ```json
 {
@@ -490,9 +496,15 @@ uv run bhd-memory worker
 行为：
 
 1. 文件 size/mtime 未变化则跳过。
-2. 文件 append-only 时从 `last_line` 继续读。
-3. 文件截断或 rewrite 时重新读取，并依赖 turn 唯一键去重。
-4. 定期 compact cursor，移除长期不存在的文件。
+2. 文件变化时重新读取，并依赖 turn 唯一键去重。
+3. 已 committed 的 session 如果插入新 turn，会重新标记为 active，等待 idle/manual commit。
+4. `auto_commit=True` 会包含未变化 session，避免 active session 被 cursor 挡住。
+
+待增强：
+
+1. 文件 append-only 时从 `last_line` 继续读，而不是整文件重读。
+2. 文件截断或 rewrite 时记录 rewrite event。
+3. 定期 compact cursor，移除长期不存在的文件。
 
 ### 10.2 Session 级 cursor
 
@@ -543,7 +555,8 @@ LLM observer 应该输出严格 JSON：
 3. tool result 可以生成 `procedure` / `lesson` / `agent` memory，但必须标记来源。
 4. 对不确定内容降低 confidence，进入 pending。
 5. evidence_turn_ids 必须存在，否则丢弃。
-6. LLM 超时或失败时 fallback 到 rule observer。
+6. 用户事实类 memory 必须至少有一个 user/human evidence；assistant/tool-only evidence 只允许生成 procedure、lesson 或 agent scope 经验。
+7. LLM 超时或失败时 fallback 到 rule observer。
 
 ## 12. 验收标准
 
@@ -582,11 +595,14 @@ LLM observer 应该输出严格 JSON：
 8. memory / evidence / operation。
 9. active memory indexing。
 10. review queue。
+11. 文件级 `sync_cursor` 跳过未变化 transcript。
+12. Codex nested `item` 消息的通用归一化。
+13. LLM observer evidence role guard，避免 assistant-only claim 写成用户偏好/profile。
 
 ### Phase 1：稳定性与可解释性
 
-1. 接入 `sync_cursor`，避免大目录反复全量扫描。
-2. 为 Codex 和 Claude Code 增加真实 fixture。
+1. 增加 session/event 级 cursor 和 append-only `last_line` 读取。
+2. 为 Codex 和 Claude Code 增加更多真实 fixture。
 3. archive 页面展示 L0/L1、turn、抽取出的 memory。
 4. memory evidence 页面展示来源 turn 和 raw artifact。
 5. watcher 增加日志和错误隔离。
@@ -633,7 +649,7 @@ LLM observer 应该输出严格 JSON：
 优先级建议：
 
 1. 写 Claude Code / Codex fixture，锁住 adapter 行为。
-2. 实现 `sync_cursor` 文件级增量扫描。
+2. 增加 session/event 级 cursor 和 append-only 增量读取。
 3. 增加 Dream archive + memory evidence 的 UI 展示。
 4. 把 Reflector 从当前规则判断升级为独立服务。
 5. 增加 Codex / Claude Code 专用 parser，解析 tool call 和 lifecycle。

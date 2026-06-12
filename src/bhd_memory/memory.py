@@ -483,6 +483,7 @@ class MemoryService:
         )
         raw_candidates = response.get("candidates", response if isinstance(response, list) else [])
         valid_turn_ids = {turn["id"] for turn in turns}
+        turn_roles = {turn["id"]: turn["role"] for turn in turns}
         candidates: list[CandidateMemory] = []
         for item in raw_candidates:
             if not isinstance(item, dict):
@@ -497,19 +498,23 @@ class MemoryService:
             ]
             if not evidence_turn_ids:
                 continue
+            category = _safe_choice(
+                item.get("category"),
+                {"profile", "preference", "entity", "event", "procedure", "lesson"},
+                "event",
+            )
+            scope = _safe_choice(
+                item.get("scope"),
+                {"global", "workspace", "session", "agent"},
+                "workspace",
+            )
+            if not _evidence_allowed_for_candidate(category, scope, evidence_turn_ids, turn_roles):
+                continue
             candidates.append(
                 CandidateMemory(
                     content=content,
-                    category=_safe_choice(
-                        item.get("category"),
-                        {"profile", "preference", "entity", "event", "procedure", "lesson"},
-                        "event",
-                    ),
-                    scope=_safe_choice(
-                        item.get("scope"),
-                        {"global", "workspace", "session", "agent"},
-                        "workspace",
-                    ),
+                    category=category,
+                    scope=scope,
                     confidence=float(item.get("confidence", 0.65)),
                     evidence_turn_ids=evidence_turn_ids,
                     reasoning=f"llm-observer-v1: {item.get('reasoning', '')}",
@@ -740,6 +745,20 @@ def _split_sentences(text: str) -> list[str]:
 def _safe_choice(value: Any, allowed: set[str], fallback: str) -> str:
     normalized = str(value or "").lower()
     return normalized if normalized in allowed else fallback
+
+
+def _evidence_allowed_for_candidate(
+    category: str,
+    scope: str,
+    evidence_turn_ids: list[str],
+    turn_roles: dict[str, str],
+) -> bool:
+    roles = {turn_roles.get(turn_id, "unknown") for turn_id in evidence_turn_ids}
+    if roles & {"user", "human"}:
+        return True
+    if scope == "agent" or category in {"procedure", "lesson"}:
+        return bool(roles & {"assistant", "tool", "function"})
+    return False
 
 
 def _is_sensitive(text: str) -> bool:

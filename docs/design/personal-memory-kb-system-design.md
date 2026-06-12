@@ -361,6 +361,7 @@ class TranscriptAdapter:
 
 ```text
 scan adapters
+  -> skip unchanged transcript by sync_cursor
   -> detect new/changed sessions
   -> normalize turns
   -> persist raw transcript + turns
@@ -431,9 +432,10 @@ Reflector 输出：
 默认策略：
 
 1. 每个 archive 最多自动创建 5-10 条 memory。
-2. assistant-only 内容不写用户 profile/preference，但可写 agent procedure/lesson。
+2. assistant-only 内容不写用户 profile/preference；LLM observer 会要求用户事实至少有一个 user/human evidence。
 3. 涉及密钥、财务、健康、身份、客户隐私默认 pending。
 4. 所有 create/update/delete 都写 `memory_operation`。
+5. assistant/tool-only evidence 只允许生成 procedure、lesson 或 agent scope 经验。
 
 ## 8. 知识上传入口实现方案
 
@@ -579,12 +581,15 @@ POST /api/retrieve
 2. 实现 Claude Code / Codex adapter。
 3. 保存原始 transcript 和标准化 turns。
 4. 支持手动 commit。
+5. 文件级 `sync_cursor` 跳过未变化 transcript。
+6. 已 committed session 追加新 turn 后重新变为 active，等待下一次 commit。
 
 验收：
 
 1. 能列出会话。
 2. 能查看 turns 和 raw artifact。
 3. 重复扫描不重复写入。
+4. 未变化 transcript 会被跳过，并返回 `skipped_sessions`。
 
 ### Phase 2：Memory 抽取与治理
 
@@ -595,12 +600,14 @@ POST /api/retrieve
 3. Reflector 去重、分类、scope 决策。
 4. `memory`、`memory_evidence`、`memory_operation`。
 5. status：active/pending/paused/archived/deleted。
+6. LLM observer evidence role guard，避免 assistant-only claim 写成用户事实。
 
 验收：
 
 1. 每条 memory 能追溯到 session/turn。
 2. 重复会话不会产生大量重复 memory。
 3. 用户能删除、归档、停用 memory。
+4. assistant-only 偏好/profile 候选不会进入长期 memory。
 
 ### Phase 3：知识上传与文档索引
 

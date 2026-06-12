@@ -40,8 +40,18 @@ class JsonlTranscriptAdapter:
         return any(root.exists() for root in self.roots)
 
     def list_sessions(self, cursor: dict | None = None) -> list[ExternalSession]:
+        cursor = cursor or {}
+        file_cursor = cursor.get("files") if isinstance(cursor.get("files"), dict) else {}
+        include_unchanged = bool(cursor.get("_include_unchanged"))
+        skipped_paths: list[str] = []
         sessions: list[ExternalSession] = []
         for path in self._iter_paths():
+            signature = self._file_signature(path)
+            cursor_key = signature["path"]
+            unchanged = _signature_matches(file_cursor.get(cursor_key), signature)
+            if unchanged and not include_unchanged:
+                skipped_paths.append(cursor_key)
+                continue
             sessions.append(
                 ExternalSession(
                     source_name=self.source_name,
@@ -49,9 +59,15 @@ class JsonlTranscriptAdapter:
                     external_session_id=self._session_id(path),
                     path=path,
                     project_path=None,
-                    metadata={"path": str(path)},
+                    metadata={
+                        "path": str(path),
+                        "cursor_key": cursor_key,
+                        "cursor_unchanged": unchanged,
+                        "file_signature": signature,
+                    },
                 )
             )
+        cursor["_skipped_paths"] = skipped_paths
         return sessions
 
     def read_turns(self, session: ExternalSession, cursor: dict | None = None) -> list[RawTurn]:
@@ -71,9 +87,11 @@ class JsonlTranscriptAdapter:
 
     def normalize_turn(self, raw: dict[str, Any], *, index: int = 0) -> RawTurn | None:
         message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+        item = raw.get("item") if isinstance(raw.get("item"), dict) else {}
         role = (
             raw.get("role")
             or message.get("role")
+            or item.get("role")
             or raw.get("type")
             or raw.get("speaker")
             or raw.get("author")
@@ -82,9 +100,24 @@ class JsonlTranscriptAdapter:
         role = _normalize_role(str(role))
         content = _extract_content(raw.get("content"))
         if not content and message:
-            content = _extract_content(message.get("content"))
+            content = _extract_content(
+                message.get("content")
+                or message.get("text")
+                or message.get("input")
+                or message.get("output")
+            )
+        if not content and item:
+            content = _extract_content(
+                item.get("content") or item.get("text") or item.get("input") or item.get("output")
+            )
         if not content:
-            content = _extract_content(raw.get("text") or raw.get("prompt") or raw.get("response"))
+            content = _extract_content(
+                raw.get("text")
+                or raw.get("prompt")
+                or raw.get("response")
+                or item.get("arguments")
+                or message.get("arguments")
+            )
         content = clean_text(content)
         if not content:
             return None
@@ -93,12 +126,17 @@ class JsonlTranscriptAdapter:
             or raw.get("timestamp")
             or raw.get("time")
             or message.get("created_at")
+            or message.get("timestamp")
+            or item.get("created_at")
+            or item.get("timestamp")
         )
         external_turn_id = str(
             raw.get("id")
             or raw.get("uuid")
             or raw.get("turn_id")
             or raw.get("request_id")
+            or message.get("id")
+            or item.get("id")
             or f"line-{index}"
         )
         return RawTurn(
@@ -125,6 +163,14 @@ class JsonlTranscriptAdapter:
 
     def _session_id(self, path: Path) -> str:
         return sha256_text(str(path.resolve()))[:32]
+
+    def _file_signature(self, path: Path) -> dict[str, Any]:
+        stat = path.stat()
+        return {
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
 
 
 class GenericPathTranscriptAdapter(JsonlTranscriptAdapter):
@@ -194,6 +240,17 @@ def _extract_content(value: Any) -> str:
                     parts.append(item["output"])
         return "\n".join(parts)
     if isinstance(value, dict):
-        return _extract_content(value.get("text") or value.get("content") or value.get("message"))
+        for key in ("text", "content", "message", "input", "output", "arguments"):
+            content = _extract_content(value.get(key))
+            if content:
+                return content
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
     return str(value)
 
+
+def _signature_matches(previous: Any, current: dict[str, Any]) -> bool:
+    if not isinstance(previous, dict):
+        return False
+    return previous.get("size") == current.get("size") and previous.get("mtime_ns") == current.get(
+        "mtime_ns"
+    )

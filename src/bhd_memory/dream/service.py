@@ -63,17 +63,40 @@ class DreamService:
                     }
                 )
                 continue
+            source_id = self._ensure_adapter_source(adapter)
+            cursor = self._load_sync_cursor(source_id, adapter)
+            adapter_cursor = dict(cursor)
+            if auto_commit:
+                adapter_cursor["_include_unchanged"] = True
             adapter_sessions = []
-            for external in adapter.list_sessions({}):
-                session = self._persist_session(external, adapter)
+            for external in adapter.list_sessions(adapter_cursor):
+                unchanged = bool(external.metadata.get("cursor_unchanged"))
+                existing_session_id = self._find_session_id(source_id, external.external_session_id)
+                if unchanged and existing_session_id:
+                    session = self._scan_session_result(
+                        existing_session_id,
+                        source_id=source_id,
+                        external=external,
+                        adapter=adapter,
+                        inserted_turns=0,
+                        skipped=True,
+                    )
+                else:
+                    session = self._persist_session(external, adapter, source_id=source_id)
+                self._record_cursor_file(cursor, external)
+                self._save_sync_cursor(source_id, adapter, cursor)
                 if auto_commit:
                     session["archive"] = self.commit_session(session["id"], reason="scan_auto_commit")
                 adapter_sessions.append(session)
+            skipped_sessions = len(adapter_cursor.get("_skipped_paths", []))
+            if not adapter_sessions:
+                self._save_sync_cursor(source_id, adapter, cursor)
             scanned.append(
                 {
                     "source": adapter.source_name,
                     "detected": True,
                     "sessions": adapter_sessions,
+                    "skipped_sessions": skipped_sessions,
                 }
             )
         return {"scanned": scanned}
@@ -272,13 +295,10 @@ class DreamService:
         self,
         external: ExternalSession,
         adapter: JsonlTranscriptAdapter,
+        *,
+        source_id: str | None = None,
     ) -> dict[str, Any]:
-        source_id = ensure_source_app(
-            self.conn,
-            name=adapter.source_name,
-            app_type=adapter.source_type,
-            config={"adapter": adapter.__class__.__name__},
-        )
+        source_id = source_id or self._ensure_adapter_source(adapter)
         stored = self.store.copy_file("transcripts", external.path)
         artifact_id = self._insert_raw_artifact(
             source_app_id=source_id,
@@ -344,6 +364,11 @@ class DreamService:
                 ),
             )
         inserted_turns = self._persist_turns(session_id, turns, artifact_id)
+        if inserted_turns:
+            self.conn.execute(
+                "UPDATE conversation_session SET status = 'active', updated_at = ? WHERE id = ?",
+                (ts, session_id),
+            )
         self.conn.commit()
         return {
             "id": session_id,
@@ -356,6 +381,116 @@ class DreamService:
             "workspace_id": workspace_id,
             "project_path": project_path,
             "repo": repo,
+        }
+
+    def _ensure_adapter_source(self, adapter: JsonlTranscriptAdapter) -> str:
+        return ensure_source_app(
+            self.conn,
+            name=adapter.source_name,
+            app_type=adapter.source_type,
+            config={"adapter": adapter.__class__.__name__},
+        )
+
+    def _find_session_id(self, source_id: str, external_session_id: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT id
+            FROM conversation_session
+            WHERE source_app_id = ? AND external_session_id = ?
+            """,
+            (source_id, external_session_id),
+        ).fetchone()
+        return str(row["id"]) if row else None
+
+    def _scan_session_result(
+        self,
+        session_id: str,
+        *,
+        source_id: str,
+        external: ExternalSession,
+        adapter: JsonlTranscriptAdapter,
+        inserted_turns: int,
+        skipped: bool = False,
+    ) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT workspace_id, project_path, repo FROM conversation_session WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        turn_count = self.conn.execute(
+            "SELECT COUNT(*) AS count FROM conversation_turn WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["count"]
+        return {
+            "id": session_id,
+            "source_app_id": source_id,
+            "source": adapter.source_name,
+            "external_session_id": external.external_session_id,
+            "path": str(external.path),
+            "turn_count": turn_count,
+            "inserted_turns": inserted_turns,
+            "workspace_id": row["workspace_id"] if row else None,
+            "project_path": row["project_path"] if row else external.project_path,
+            "repo": row["repo"] if row else None,
+            "skipped": skipped,
+        }
+
+    def _sync_cursor_id(self, adapter: JsonlTranscriptAdapter) -> str:
+        return f"dream:{adapter.source_name}"
+
+    def _load_sync_cursor(self, source_id: str, adapter: JsonlTranscriptAdapter) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT cursor_json FROM sync_cursor WHERE id = ?",
+            (self._sync_cursor_id(adapter),),
+        ).fetchone()
+        cursor = json_loads(row["cursor_json"] if row else None)
+        if not isinstance(cursor, dict):
+            cursor = {}
+        cursor.setdefault("files", {})
+        cursor["source_app_id"] = source_id
+        return cursor
+
+    def _save_sync_cursor(
+        self,
+        source_id: str,
+        adapter: JsonlTranscriptAdapter,
+        cursor: dict[str, Any],
+    ) -> None:
+        stored_cursor = {
+            key: value
+            for key, value in cursor.items()
+            if not str(key).startswith("_") and key != "source_app_id"
+        }
+        stored_cursor.setdefault("files", {})
+        ts = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO sync_cursor(id, source_app_id, cursor_json, last_seen_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              source_app_id = excluded.source_app_id,
+              cursor_json = excluded.cursor_json,
+              last_seen_at = excluded.last_seen_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                self._sync_cursor_id(adapter),
+                source_id,
+                json_dumps(stored_cursor),
+                ts,
+                ts,
+            ),
+        )
+        self.conn.commit()
+
+    def _record_cursor_file(self, cursor: dict[str, Any], external: ExternalSession) -> None:
+        signature = external.metadata.get("file_signature")
+        cursor_key = external.metadata.get("cursor_key")
+        if not isinstance(signature, dict) or not isinstance(cursor_key, str):
+            return
+        cursor.setdefault("files", {})[cursor_key] = {
+            **signature,
+            "external_session_id": external.external_session_id,
+            "seen_at": now_iso(),
         }
 
     def _persist_turns(self, session_id: str, turns: list[RawTurn], artifact_id: str) -> int:
