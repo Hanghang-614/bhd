@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .ui import INDEX_HTML
 from ..config import Settings
 from ..database import open_db
 from ..dream import DreamService
@@ -162,10 +163,17 @@ def create_app(
         embedding_dim=settings.embedding_dim,
     )
     app.state.store = ArtifactStore(settings.data_dir)
+    static_dir = Path(__file__).with_name("static")
+    index_html = static_dir / "index.html"
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
     @app.get("/", response_class=HTMLResponse)
-    def index_page() -> str:
-        return INDEX_HTML
+    def index_page():
+        if index_html.exists():
+            return FileResponse(index_html)
+        return "<!doctype html><title>BHD Memory</title><h1>BHD Memory</h1><p>Frontend build missing. Run npm run build in ./frontend.</p>"
 
     @app.get("/health")
     def health(request: Request) -> dict[str, Any]:

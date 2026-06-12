@@ -12,6 +12,7 @@
 | Document | Description |
 |---|---|
 | [`design/personal-memory-kb-system-design.md`](design/personal-memory-kb-system-design.md) | 最终方案文档：架构、数据模型、Dream 入口、知识上传、Qdrant/SQLite 选型、MVP 路线 |
+| [`design/dream-transcript-memory-solution.md`](design/dream-transcript-memory-solution.md) | Dream 专项方案：transcript 扫描、会话归档、长期记忆抽取、治理与后续路线 |
 | [`research/personal-memory-kb-research.md`](research/personal-memory-kb-research.md) | 调研分析文档：mem0、OpenViking、Khoj、AnythingLLM 等项目参考 |
 | [`usage/quickstart.md`](usage/quickstart.md) | 本地 Qdrant、CLI、API、Dream 扫描、知识上传与检索使用说明 |
 | [`usage/plugins.md`](usage/plugins.md) | Codex / Claude Code hook 插件样板说明 |
