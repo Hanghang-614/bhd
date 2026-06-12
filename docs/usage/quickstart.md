@@ -10,7 +10,7 @@
 
 脚本会检查本机 Qdrant、初始化 SQLite schema 和 Qdrant collection，并启动 Web UI。默认地址是 `http://127.0.0.1:8767`。
 
-Web UI 使用 React + Vite，样式参考 MIT 许可证的 AnythingLLM 工作台界面。`./start.sh`
+Web UI 使用 React + Vite。`./start.sh`
 会在构建产物缺失或前端源码更新时自动构建。手动构建：
 
 ```bash

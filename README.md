@@ -40,7 +40,7 @@ Web 管理界面：
 http://127.0.0.1:8767/
 ```
 
-前端使用 React + Vite，样式参考 MIT 许可证的 AnythingLLM 工作台界面。`./start.sh`
+前端使用 React + Vite。`./start.sh`
 会在构建产物缺失或前端源码更新时自动构建。
 
 打开 API 健康检查：

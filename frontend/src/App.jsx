@@ -287,9 +287,6 @@ function App() {
 
           <div className="sidebar-footer">
             <HealthPill health={health} />
-            <div className="sidebar-note">
-              Style reference: AnythingLLM (MIT)
-            </div>
           </div>
         </div>
       </aside>
