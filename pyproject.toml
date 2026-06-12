@@ -1,0 +1,57 @@
+[project]
+name = "bhd-memory"
+version = "0.1.0"
+description = "Personal memory and knowledge-base system with Dream transcript ingest."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Hanghang" }]
+license = { text = "MIT" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.115.0",
+  "pydantic>=2.8.0",
+  "python-multipart>=0.0.9",
+  "pypdf>=4.2.0",
+  "qdrant-client>=1.12.0",
+  "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0",
+  "pytest>=8.2.0",
+  "ruff>=0.5.0",
+]
+[project.scripts]
+bhd-memory = "bhd_memory.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Hanghang-614/bhd"
+Documentation = "https://github.com/Hanghang-614/bhd/tree/main/docs"
+Issues = "https://github.com/Hanghang-614/bhd/issues"
+Source = "https://github.com/Hanghang-614/bhd"
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [
+  ".bhd",
+  ".venv",
+  "research_repos",
+]

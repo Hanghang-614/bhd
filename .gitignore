@@ -1,0 +1,22 @@
+.bhd/
+.env
+.env.*
+!.env.example
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local research checkouts are reference material, not vendored source.
+research_repos/*
+!research_repos/README.md

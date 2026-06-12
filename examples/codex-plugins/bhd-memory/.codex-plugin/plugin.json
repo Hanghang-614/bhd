@@ -1,0 +1,22 @@
+{
+  "name": "bhd-memory",
+  "version": "0.1.0",
+  "description": "Local personal memory and knowledge recall for Codex.",
+  "author": {
+    "name": "BHD"
+  },
+  "interface": {
+    "displayName": "BHD Memory",
+    "shortDescription": "Recall and capture local BHD memories in Codex.",
+    "longDescription": "BHD Memory connects Codex lifecycle hooks to the local BHD Memory service. It recalls relevant memory and knowledge on prompt submit, captures turns on stop, and commits the session before compaction.",
+    "developerName": "BHD",
+    "category": "Productivity",
+    "capabilities": [
+      "Memory recall",
+      "Auto memory capture",
+      "Session commit",
+      "Knowledge retrieval"
+    ],
+    "defaultPrompt": "Use BHD Memory to recall relevant personal memory and project knowledge."
+  }
+}
